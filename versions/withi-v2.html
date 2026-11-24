@@ -1,0 +1,1360 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>WITHI v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js"></script>
+<style>
+/* Layout: full-bleed 3D map; floating glass cards — maneuver (bottom-left), info panel (right), status (top), dock (bottom). */
+:root{
+  --bg:#070d17; --glass:rgba(14,22,36,.78); --glass-strong:rgba(12,19,32,.9);
+  --line:rgba(140,190,230,.16); --fg:#eef4fb; --muted:#8fa3b9; --dim:#5d7088;
+  --route:#22e3f2; --route-glow:rgba(34,227,242,.35);
+  --ok:#3ddc84; --warn:#ffb020; --bad:#ff5d5d;
+  --radius:18px;
+  --font:"IBM Plex Sans Thai","Noto Sans Thai","Leelawadee UI",Tahoma,sans-serif;
+  --warn-text:#ffb020; --jv-road:#223149; --jv-bridge:#6b8fbd; --jv-dim:#4d6079; --jv-mark:rgba(255,255,255,.55); --jv-lane-rec:rgba(34,227,242,.18); --jv-lane-best:rgba(34,227,242,.4);
+  color-scheme:dark;
+}
+:root[data-mode="day"]{
+  --bg:#e9edf2; --glass:rgba(255,255,255,.82); --glass-strong:rgba(255,255,255,.94);
+  --line:rgba(30,50,80,.12); --fg:#0f1b2b; --muted:#53657a; --dim:#8a99aa;
+  --route:#0aa5c4; --route-glow:rgba(10,165,196,.25);
+  --warn-text:#a35f00; --jv-road:#c3ccd8; --jv-bridge:#ffffff; --jv-dim:#8a99aa; --jv-mark:rgba(255,255,255,.95); --jv-lane-rec:rgba(10,165,196,.16); --jv-lane-best:rgba(10,165,196,.34);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);overflow:hidden;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--route);outline-offset:2px}
+#map{position:absolute;inset:0}
+.num{font-variant-numeric:tabular-nums}
+.glass{background:var(--glass);backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 10px 30px rgba(0,0,0,.28)}
+
+/* status bar */
+#status{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));
+  pointer-events:none;z-index:5;background:linear-gradient(to bottom,rgba(0,0,0,.35),transparent)}
+:root[data-mode="day"] #status{background:linear-gradient(to bottom,rgba(255,255,255,.6),transparent)}
+.brand{display:flex;align-items:baseline;gap:8px}
+.brand b{font-weight:700;letter-spacing:.28em;font-size:18px}
+.brand span{color:var(--muted);font-size:13px}
+.stat{display:flex;gap:14px;align-items:center;color:var(--muted);font-size:13px}
+.stat .pill{border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:12px}
+.stat .pill.live{color:var(--ok);border-color:rgba(61,220,132,.4)}
+.stat .pill.sim{color:var(--route);border-color:var(--route-glow)}
+#clock{color:var(--fg);font-weight:600;font-size:15px}
+
+/* maneuver card */
+#maneuver{position:absolute;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(78px + env(safe-area-inset-bottom,0px));
+  display:flex;gap:14px;align-items:center;padding:14px 18px 14px 14px;min-width:260px;max-width:min(440px,calc(100vw - 32px));z-index:4}
+#maneuver .ic{width:56px;height:56px;flex:none;display:grid;place-items:center;border-radius:14px;background:rgba(34,227,242,.12)}
+#maneuver .ic svg{width:44px;height:44px}
+#maneuver .d{font-size:30px;font-weight:700;line-height:1.05}
+#maneuver .t{font-size:16px;font-weight:600;margin-top:2px}
+#maneuver .r{font-size:13px;color:var(--muted);margin-top:2px}
+#nextman{position:absolute;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(166px + env(safe-area-inset-bottom,0px));
+  font-size:13px;padding:6px 12px;border-radius:12px;color:var(--muted);z-index:4}
+
+/* info panel */
+#panel{position:absolute;right:max(16px,env(safe-area-inset-right,0px));top:calc(env(safe-area-inset-top,0px) + 56px);
+  width:300px;max-height:calc(100% - 150px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));overflow:auto;padding:18px;z-index:4}
+#panel h2{margin:0 0 2px;font-size:20px;font-weight:700;text-wrap:balance}
+#panel .sub{color:var(--muted);font-size:13px;margin-bottom:12px}
+.big{font-size:44px;font-weight:600;line-height:1}
+.big small{font-size:18px;color:var(--muted);font-weight:500;margin-left:4px}
+.row{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.row span:first-child{color:var(--muted)}
+.row b{font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+.chip.ok{color:var(--ok);border-color:rgba(61,220,132,.45)}
+.batt{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.batt .cell{width:44px;height:20px;border:2px solid currentColor;border-radius:5px;position:relative;padding:2px}
+.batt .cell::after{content:"";position:absolute;right:-6px;top:5px;width:3px;height:7px;background:currentColor;border-radius:0 2px 2px 0}
+.batt .fill{height:100%;border-radius:2px;background:currentColor}
+.batt .pct{font-size:30px;font-weight:600}
+.note{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.5}
+.btns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.btn{flex:1 1 auto;border:1px solid var(--line);background:transparent;border-radius:12px;padding:10px 12px;font-weight:600;font-size:14px}
+.btn.primary{background:var(--route);color:#04121a;border-color:transparent}
+.btn:disabled{opacity:.45;cursor:default}
+.list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.item{display:flex;justify-content:space-between;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);background:transparent;border-radius:12px;padding:9px 11px;width:100%}
+.item .n{font-weight:600;font-size:14px}
+.item .m{font-size:12px;color:var(--muted)}
+.item .k{font-weight:700;color:var(--route);white-space:nowrap}
+.tag{display:inline-block;font-size:11px;letter-spacing:.06em;color:var(--route);border:1px solid var(--route-glow);border-radius:6px;padding:1px 6px;margin-bottom:8px}
+
+/* dock */
+#dock{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:center;gap:6px;
+  padding:8px max(16px,env(safe-area-inset-right,0px)) calc(8px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  background:var(--glass-strong);border-top:1px solid var(--line);z-index:6}
+#dock button{background:transparent;border:0;border-radius:12px;width:52px;height:48px;display:grid;place-items:center;color:var(--muted)}
+#dock button.on{color:var(--route)}
+#dock button:hover{color:var(--fg)}
+#dock svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#dock .sep{width:1px;background:var(--line);margin:8px 6px}
+
+/* sheets */
+.sheet{position:absolute;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 56px);width:min(520px,calc(100vw - 32px));padding:14px;z-index:8;max-height:calc(100% - 140px);overflow:auto}
+.sheet h3{margin:0 0 10px;font-size:16px}
+.search{display:flex;gap:8px}
+.search input{flex:1;min-width:0;border:1px solid var(--line);background:rgba(0,0,0,.15);color:var(--fg);border-radius:12px;padding:11px 14px;font:inherit;font-size:16px}
+:root[data-mode="day"] .search input{background:rgba(255,255,255,.7)}
+.field{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}
+.field select,.field input{background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:6px 8px;font:inherit;width:140px}
+.field select option{background:#101826;color:#eef4fb}
+.close{float:right;border:0;background:transparent;color:var(--muted);font-size:22px;line-height:1}
+
+#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));padding:10px 16px;border-radius:12px;font-size:14px;z-index:9;max-width:calc(100vw - 32px)}
+
+/* markers */
+.car{width:34px;height:34px}
+.car svg{width:100%;height:100%;filter:drop-shadow(0 0 8px var(--route))}
+.pin{display:grid;place-items:center;width:34px;height:34px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:var(--route);box-shadow:0 0 18px var(--route);border:2px solid #fff}
+.pin svg{transform:rotate(45deg);width:18px;height:18px}
+.poi{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--glass-strong);border:1.5px solid var(--route);cursor:pointer}
+.poi svg{width:15px;height:15px}
+.lm{font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:var(--glass-strong);border:1px solid var(--line);white-space:nowrap;color:var(--fg)}
+.menu{display:flex;flex-direction:column;gap:6px;padding:8px}
+.menu button{border:1px solid var(--line);background:var(--glass-strong);border-radius:10px;padding:8px 12px;text-align:left;font-size:14px}
+.maplibregl-popup-content{background:transparent;padding:0;box-shadow:none}
+.maplibregl-popup-tip{display:none}
+.maplibregl-ctrl-attrib{font-size:10px;background:rgba(0,0,0,.35)!important;color:#9ab}
+.maplibregl-ctrl-attrib a{color:#9ab}
+.maplibregl-ctrl-bottom-right{bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+
+/* junction view (lane alert pop-up) */
+#jv{position:absolute;left:max(16px,env(safe-area-inset-left,0px));top:calc(env(safe-area-inset-top,0px) + 52px);width:450px;max-width:calc(100vw - 32px);
+  max-height:calc(100% - 130px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));overflow:auto;padding:16px;z-index:7;
+  border:2px solid var(--route);background:var(--glass-strong);box-shadow:0 0 0 1px rgba(0,0,0,.25),0 0 34px var(--route-glow);animation:jvIn .28s ease-out}
+@keyframes jvIn{from{transform:translateY(-14px);opacity:0}to{transform:none;opacity:1}}
+#jv.urgent{animation:jvPulse 1s ease-in-out infinite}
+@keyframes jvPulse{50%{box-shadow:0 0 0 5px var(--route-glow),0 0 44px var(--route)}}
+.jv-head{display:flex;gap:14px;align-items:center}
+.jv-head .ic{width:68px;height:68px;flex:none;display:grid;place-items:center;border-radius:16px;background:rgba(34,227,242,.14)}
+.jv-head .ic svg{width:54px;height:54px}
+.jv-d{font-size:40px;font-weight:700;line-height:1}
+.jv-t{font-size:18px;font-weight:700;margin-top:4px;text-wrap:balance}
+.jv-s{font-size:13px;color:var(--muted);margin-top:2px}
+#jv .chips{margin:10px 0 0}
+.chip.warn,.chip.toll{color:var(--warn-text);border-color:var(--warn-text)}
+.jv-body{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;margin-top:10px}
+.jv-junction svg{width:100%;height:auto;max-height:190px;display:block}
+.jv-lanes{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0}
+.jv-lanes svg{max-width:100%;height:auto;display:block}
+.jv-cap{font-size:11px;color:var(--dim);text-align:center;max-width:190px;line-height:1.4}
+.jv-advice{margin-top:12px;font-size:24px;font-weight:700;color:var(--route);line-height:1.25;text-wrap:balance}
+.jv-cue{margin-top:8px;font-size:18px;font-weight:700;color:var(--warn-text);display:flex;gap:8px;align-items:center;line-height:1.3}
+.jv-cue svg{flex:none;width:22px;height:22px}
+.jv-then{margin-top:8px;font-size:14px;padding:8px 10px;border-radius:10px;border:1px solid var(--line)}
+.jv-bar{height:6px;border-radius:3px;background:var(--line);margin-top:12px;overflow:hidden}
+.jv-bar i{display:block;height:100%;width:0;background:var(--route);transition:width .3s linear}
+.chip.btnchip{background:transparent;color:var(--fg);cursor:pointer}
+
+/* narrow / portrait */
+@media (max-width:720px){
+  #panel{top:auto;right:16px;left:16px;width:auto;bottom:calc(150px + env(safe-area-inset-bottom,0px));max-height:38vh;padding:14px}
+  #panel .big{font-size:34px}
+  #maneuver{top:calc(env(safe-area-inset-top,0px) + 48px);bottom:auto;left:16px;right:16px;max-width:none}
+  #nextman{top:calc(env(safe-area-inset-top,0px) + 140px);bottom:auto}
+  .brand span{display:none}
+  #dock button{width:44px}
+  #jv{left:12px;right:12px;width:auto;max-width:none;top:calc(env(safe-area-inset-top,0px) + 44px);padding:12px}
+  .jv-d{font-size:32px}
+  .jv-head .ic{width:56px;height:56px}
+  .jv-head .ic svg{width:44px;height:44px}
+  .jv-junction svg{max-height:130px}
+  .jv-advice{font-size:20px}
+  .jv-cue{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div id="map" aria-label="แผนที่ 3 มิติ"></div>
+
+<header id="status">
+  <div class="brand"><b>WITHI</b><span>วิถี · v2</span></div>
+  <div class="stat">
+    <span id="gpsPill" class="pill">ตัวอย่าง</span>
+    <span id="phoneBatt" class="num"></span>
+    <span id="clock" class="num">--:--</span>
+  </div>
+</header>
+
+<div id="nextman" class="glass" hidden></div>
+<section id="maneuver" class="glass" aria-live="polite" hidden>
+  <div class="ic" id="manIcon"></div>
+  <div style="min-width:0">
+    <div class="d num" id="manDist">—</div>
+    <div class="t" id="manText">—</div>
+    <div class="r" id="manRoad"></div>
+  </div>
+</section>
+
+<section id="jv" hidden aria-live="assertive" aria-label="แจ้งเตือนช่องทาง">
+  <div class="jv-head">
+    <div class="ic" id="jvIcon"></div>
+    <div style="min-width:0">
+      <div class="jv-d num" id="jvDist"></div>
+      <div class="jv-t" id="jvText"></div>
+      <div class="jv-s" id="jvSign"></div>
+    </div>
+  </div>
+  <div class="chips" id="jvTags"></div>
+  <div class="jv-body"><div class="jv-junction" id="jvJunction"></div><div class="jv-lanes" id="jvLanes"></div></div>
+  <div class="jv-advice" id="jvAdvice"></div>
+  <div class="jv-cue" id="jvCue" hidden></div>
+  <div class="jv-then" id="jvThen" hidden></div>
+  <div class="jv-bar" id="jvBarWrap"><i id="jvBar"></i></div>
+  <div class="btns" id="jvNav" hidden><button class="btn" id="jvPrev">ก่อนหน้า</button><button class="btn" id="jvNext">ถัดไป</button><button class="btn primary" id="jvClose">ปิด</button></div>
+</section>
+
+<aside id="panel" class="glass" aria-live="polite"></aside>
+
+<section id="searchSheet" class="sheet glass" hidden>
+  <button class="close" data-close="searchSheet" aria-label="ปิด">×</button>
+  <h3>ไปที่ไหนดี</h3>
+  <form class="search" id="searchForm">
+    <input id="q" type="search" placeholder="ค้นหาสถานที่ เช่น สยามพารากอน" autocomplete="off" enterkeyhint="search">
+    <button class="btn primary" type="submit" style="flex:none">ค้นหา</button>
+  </form>
+  <div class="list" id="results"></div>
+  <p class="note" style="margin-bottom:0">เส้นทางทดสอบทางแยกซับซ้อน</p>
+  <div class="chips" id="presets"></div>
+</section>
+
+<section id="settingsSheet" class="sheet glass" hidden>
+  <button class="close" data-close="settingsSheet" aria-label="ปิด">×</button>
+  <h3>ตั้งค่า</h3>
+  <label class="field">ประเภทรถ<select id="sVehicle"><option value="ev">ไฟฟ้า (EV)</option><option value="fuel">น้ำมัน / ไฮบริด</option></select></label>
+  <label class="field">แบตเตอรี่ตอนนี้ (%)<input id="sBattery" type="number" min="1" max="100" step="1"></label>
+  <label class="field">ความจุแบต (kWh)<input id="sCapacity" type="number" min="10" max="200" step="1"></label>
+  <label class="field">อัตราใช้ไฟ (kWh/100 กม.)<input id="sCons" type="number" min="8" max="40" step="0.5"></label>
+  <label class="field">ชื่อบนแผนที่<select id="sLang"><option value="th">ภาษาไทย</option><option value="en">English</option></select></label>
+  <label class="field">โหมดสี<select id="sTheme"><option value="auto">อัตโนมัติตามเวลา</option><option value="night">กลางคืน</option><option value="day">กลางวัน</option></select></label>
+  <label class="field">เตือนช่องทางที่แยกซับซ้อน<select id="sLane"><option value="on">เปิด</option><option value="off">ปิด</option></select></label>
+  <label class="field">ความเร็วจำลอง<select id="sSim"><option value="1">x1 (ตามจริง)</option><option value="2">x2</option><option value="4">x4</option><option value="8">x8</option></select></label>
+  <p class="note">ข้อมูลแผนที่และอาคาร © OpenStreetMap contributors ผ่าน OpenFreeMap · เส้นทางจาก OSRM · ค้นหาจาก Nominatim · จุดชาร์จและปั๊มจาก OpenStreetMap (Overpass) · ความสูงตึกมาจากแท็ก OSM ตึกที่ไม่มีข้อมูลจะแสดงเตี้ยกว่าจริง · ช่องจราจรมาจากแท็ก turn:lanes ของ OSM ถ้าแยกไหนไม่มีข้อมูล แอปจะแนะนำช่องโดยประมาณจากทิศทางและบอกไว้ในหน้าต่าง · สะพานและอุโมงค์ตรวจจากข้อมูลถนนในแผนที่</p>
+</section>
+
+<div id="toast" class="glass" hidden></div>
+
+<nav id="dock" aria-label="เมนู">
+  <button id="bSearch" title="ค้นหาปลายทาง" aria-label="ค้นหาปลายทาง"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
+  <button id="bNearby" title="จุดชาร์จใกล้เคียง" aria-label="จุดชาร์จใกล้เคียง"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></button>
+  <button id="bCenter" title="กลับมาที่ตำแหน่ง" aria-label="กลับมาที่ตำแหน่ง"><svg viewBox="0 0 24 24"><path d="M12 3l7 18-7-4-7 4z"/></svg></button>
+  <span class="sep"></span>
+  <button id="bHome" title="ภาพรวมเส้นทาง" aria-label="ภาพรวมเส้นทาง"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg></button>
+  <span class="sep"></span>
+  <button id="bTheme" title="กลางวัน/กลางคืน" aria-label="สลับกลางวันกลางคืน"><svg viewBox="0 0 24 24"><path d="M21 13A9 9 0 1111 3a7 7 0 0010 10z"/></svg></button>
+  <button id="bVoice" title="เสียงนำทาง" aria-label="เปิดปิดเสียงนำทาง"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z"/><path id="voiceWave" d="M16 9a4 4 0 010 6M18.5 6.5a8 8 0 010 11"/></svg></button>
+  <button id="bSettings" title="ตั้งค่า" aria-label="ตั้งค่า"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg></button>
+</nav>
+
+<script>
+"use strict";
+/* ============================================================
+   WITHI v1 — web prototype
+   Data: OpenFreeMap (OSM vector tiles), OSRM, Nominatim/Photon, Overpass
+   ============================================================ */
+
+/* ---------- config ---------- */
+const API = {
+  tiles: "https://tiles.openfreemap.org/planet",
+  glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  osrm: "https://router.project-osrm.org/route/v1/driving/",
+  nominatim: "https://nominatim.openstreetmap.org/search",
+  photon: "https://photon.komoot.io/api/",
+  overpass: "https://overpass-api.de/api/interpreter"
+};
+const TH_BBOX = [97.3, 5.6, 105.7, 20.5];
+const DEMO = {
+  origin: { lngLat: [100.5088, 13.7185], name: "ถนนเจริญนคร" },
+  fallbackDest: { lngLat: [100.5104, 13.7267], name: "ไอคอนสยาม" },
+  view: { center: [100.5112, 13.7232], zoom: 15.6, pitch: 62, bearing: -28 }
+};
+const LANDMARKS = [
+  { name: "ไอคอนสยาม", en: "ICONSIAM", lngLat: [100.5104, 13.7267] },
+  { name: "คิง เพาเวอร์ มหานคร", en: "King Power MahaNakhon", lngLat: [100.5283, 13.7236] },
+  { name: "สเตท ทาวเวอร์", en: "State Tower", lngLat: [100.5167, 13.7216] }
+];
+
+/* ---------- settings (per-device) ---------- */
+const DEFAULTS = { vehicle: "ev", battery: 68, capacity: 60, consumption: 15, lang: "th", theme: "auto", voice: true, sim: 4, laneAlert: "on" };
+const S = Object.assign({}, DEFAULTS, loadSettings());
+function loadSettings() { try { return JSON.parse(localStorage.getItem("withi.settings") || "{}"); } catch (e) { return {}; } }
+function saveSettings() { try { localStorage.setItem("withi.settings", JSON.stringify(S)); } catch (e) {} }
+
+/* ---------- small utils ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const R_EARTH = 6371008.8;
+const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+function haversine(a, b) {
+  const dLat = toRad(b[1] - a[1]), dLon = toRad(b[0] - a[0]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R_EARTH * Math.asin(Math.sqrt(h));
+}
+function bearing(a, b) {
+  const y = Math.sin(toRad(b[0] - a[0])) * Math.cos(toRad(b[1]));
+  const x = Math.cos(toRad(a[1])) * Math.sin(toRad(b[1])) - Math.sin(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.cos(toRad(b[0] - a[0]));
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+function angleLerp(a, b, t) { let d = ((b - a + 540) % 360) - 180; return (a + d * t + 360) % 360; }
+function roundM(m) { return m < 100 ? Math.max(10, Math.round(m / 10) * 10) : Math.round(m / 50) * 50; }
+function kmStr(m) { return m < 10000 ? (m / 1000).toFixed(1).replace(/\.0$/, "") : String(Math.round(m / 1000)); }
+function fmtDist(m) { return roundM(m) < 1000 ? roundM(m) + " ม." : kmStr(m) + " กม."; }
+function spokenDist(m) { return roundM(m) < 1000 ? roundM(m) + " เมตร" : kmStr(m) + " กิโลเมตร"; }
+function fmtDur(s) { const m = Math.round(s / 60); if (m < 60) return m + " นาที"; return Math.floor(m / 60) + " ชม. " + (m % 60) + " นาที"; }
+function fmtClock(d) { return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+function toast(msg, ms = 3200) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, ms); }
+async function getJSON(url, opts = {}, timeoutMs = 15000) {
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), timeoutMs);
+  try { const r = await fetch(url, Object.assign({ signal: ctl.signal }, opts)); if (!r.ok) throw new Error("HTTP " + r.status); return await r.json(); }
+  finally { clearTimeout(tm); }
+}
+
+/* ---------- Thai turn instructions (OSRM maneuver -> Thai) ---------- */
+const MOD_TH = {
+  "straight": "ตรงไป", "right": "เลี้ยวขวา", "left": "เลี้ยวซ้าย",
+  "slight right": "เบี่ยงขวา", "slight left": "เบี่ยงซ้าย",
+  "sharp right": "เลี้ยวขวาหักศอก", "sharp left": "เลี้ยวซ้ายหักศอก", "uturn": "กลับรถ"
+};
+function sideTh(mod) { return /left/.test(mod || "") ? "ซ้าย" : /right/.test(mod || "") ? "ขวา" : ""; }
+function roadOf(step) { return (step.name && step.name.trim()) || (step.ref && step.ref.trim()) || ""; }
+function thaiInstruction(step) {
+  const m = step.maneuver || {}, type = m.type, mod = m.modifier || "straight";
+  const road = roadOf(step), into = road ? " เข้า" + road : "";
+  switch (type) {
+    case "depart": return road ? "เริ่มต้นบน" + road : "ออกเดินทาง";
+    case "arrive": { const s = sideTh(mod); return "ถึงที่หมาย" + (s ? " อยู่ทาง" + s : ""); }
+    case "turn": case "end of road": case "new name":
+      if (mod === "straight") return road ? "ตรงไปตาม" + road : "ตรงไป";
+      return (MOD_TH[mod] || "เลี้ยว") + into;
+    case "continue":
+      if (mod === "uturn") return "กลับรถ" + into;
+      if (mod === "straight") return road ? "ตรงไปตาม" + road : "ตรงไปต่อ";
+      return (MOD_TH[mod] || "ตรงไปต่อ") + into;
+    case "merge": { const s = sideTh(mod); return "ค่อยๆ เบี่ยง" + (s || "") + "เข้าร่วมเส้นทาง" + (road ? " " + road : ""); }
+    case "on ramp": { const s = sideTh(mod); return "ขึ้นทางลาด" + (s ? "ด้าน" + s : "") + (road ? " ไป" + road : ""); }
+    case "off ramp": { const s = sideTh(mod); return "ใช้ทางออก" + (s ? "ด้าน" + s : "") + (road ? " ไป" + road : ""); }
+    case "fork": { const s = sideTh(mod); return "ที่ทางแยก ให้ใช้ทาง" + (s || "ตรง") + (road ? " ไป" + road : ""); }
+    case "roundabout": case "rotary": case "roundabout turn":
+      return "เข้าวงเวียน" + (m.exit ? " แล้วออกทางออกที่ " + m.exit : "") + into;
+    case "exit roundabout": case "exit rotary": return "ออกจากวงเวียน" + into;
+    default: return road ? "ตรงไปตาม" + road : "ตรงไปต่อ";
+  }
+}
+function maneuverKind(step) {
+  const m = step.maneuver || {}, t = m.type, mod = m.modifier || "straight";
+  if (t === "arrive") return "arrive";
+  if (/roundabout|rotary/.test(t)) return "roundabout";
+  if (mod === "uturn") return "uturn";
+  return mod;
+}
+
+/* ---------- maneuver icons (48x48) ---------- */
+const ARROW_P = {
+  straight: '<path d="M24 42V8M14 18l10-10 10 10"/>',
+  right: '<path d="M16 42V26q0-10 10-10h14M32 8l8 8-8 8"/>',
+  "slight right": '<path d="M20 42V28l14-16M25 11h10v10"/>',
+  "sharp right": '<path d="M14 42V14q0-6 5-3l17 22M36 21v12H24"/>',
+  uturn: '<path d="M14 42V18q0-10 10-10t10 10v16M26 26l8 8 8-8"/>',
+  roundabout: '<circle cx="24" cy="20" r="8"/><path d="M24 42V28M30 14l8-8M31 6h7v7"/>',
+  arrive: '<path d="M16 42V8"/><path d="M16 8h18l-4 6 4 6H16z" fill="currentColor"/>'
+};
+function arrowInner(kind) {
+  if (ARROW_P[kind]) return ARROW_P[kind];
+  if (/left/.test(kind || "")) return '<g transform="translate(48 0) scale(-1 1)">' + (ARROW_P[kind.replace("left", "right")] || ARROW_P.right) + "</g>";
+  return ARROW_P.straight;
+}
+function arrowSvg(kind) {
+  return '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--route)">' + arrowInner(kind) + "</svg>";
+}
+/* arrow glyph nested inside another SVG (lane diagram) */
+function glyph(kind, x, y, size, color, sw) {
+  return '<svg x="' + x + '" y="' + y + '" width="' + size + '" height="' + size + '" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="' + (sw || 5) +
+    '" stroke-linecap="round" stroke-linejoin="round" style="color:' + color + '">' + arrowInner(kind) + "</svg>";
+}
+
+/* ---------- route geometry helpers (local metric plane) ---------- */
+function buildTrack(coords) {
+  const lat0 = coords[0][1], k = Math.cos(toRad(lat0));
+  const xy = coords.map(c => [c[0] * k * 111320, c[1] * 110540]);
+  const cum = [0];
+  for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+  return { coords, xy, cum, k, len: cum[cum.length - 1] };
+}
+function toXY(tr, ll) { return [ll[0] * tr.k * 111320, ll[1] * 110540]; }
+/* project point onto polyline; search window [from, to) */
+function project(tr, ll, from = 0, to = tr.xy.length - 1) {
+  const p = toXY(tr, ll); let best = { d: Infinity, along: 0, i: 0 };
+  for (let i = Math.max(0, from); i < Math.min(to, tr.xy.length - 1); i++) {
+    const a = tr.xy[i], b = tr.xy[i + 1], vx = b[0] - a[0], vy = b[1] - a[1], L2 = vx * vx + vy * vy;
+    let t = L2 ? ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+    const qx = a[0] + vx * t, qy = a[1] + vy * t, d = Math.hypot(p[0] - qx, p[1] - qy);
+    if (d < best.d) best = { d, along: tr.cum[i] + Math.sqrt(L2) * t, i };
+  }
+  return best;
+}
+function pointAt(tr, along) {
+  along = Math.max(0, Math.min(tr.len, along));
+  let lo = 0, hi = tr.cum.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (tr.cum[mid] <= along) lo = mid; else hi = mid; }
+  const seg = tr.cum[hi] - tr.cum[lo], t = seg ? (along - tr.cum[lo]) / seg : 0, a = tr.coords[lo], b = tr.coords[hi];
+  return { ll: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], i: lo };
+}
+function sliceTo(tr, along) { const p = pointAt(tr, along); return tr.coords.slice(0, p.i + 1).concat([p.ll]); }
+function sliceFrom(tr, along) { const p = pointAt(tr, along); return [p.ll].concat(tr.coords.slice(p.i + 1)); }
+function circlePoly(center, radiusM, n = 72) {
+  const pts = [], k = Math.cos(toRad(center[1]));
+  for (let i = 0; i <= n; i++) { const a = 2 * Math.PI * i / n; pts.push([center[0] + (radiusM * Math.sin(a)) / (111320 * k), center[1] + (radiusM * Math.cos(a)) / 110540]); }
+  return { type: "Feature", geometry: { type: "Polygon", coordinates: [pts] }, properties: {} };
+}
+function norm180(a) { return ((a % 360) + 540) % 360 - 180; }
+function destPoint(ll, brg, d) { const k = Math.cos(toRad(ll[1])); return [ll[0] + d * Math.sin(toRad(brg)) / (111320 * k), ll[1] + d * Math.cos(toRad(brg)) / 110540]; }
+function sliceBetween(tr, a, b) {
+  a = Math.max(0, a); b = Math.min(tr.len, b);
+  const pa = pointAt(tr, a), pb = pointAt(tr, b);
+  return [pa.ll].concat(tr.coords.slice(pa.i + 1, pb.i + 1), [pb.ll]);
+}
+
+/* ============================================================
+   V2 — junction / lane alerts
+   Alerts come from OSRM step intersections:
+   - "maneuver": a turn at a complex place (fork, ramp, roundabout, U-turn,
+     real lane data, 5+ way junction, turns in quick succession, entering an expressway)
+   - "pass": an intersection we drive straight through where another road splits
+     off at a shallow angle (flyover entrances, expressway ramps). Shown only if the
+     map tiles confirm a level difference (bridge / tunnel) or an expressway.
+   ============================================================ */
+const REASON_TH = { ramp: "ทางขึ้น-ลง", fork: "ทางแยกสองทาง", roundabout: "วงเวียน", uturn: "จุดกลับรถ", lanes: "ต้องเลือกช่อง", big: "แยกใหญ่", chain: "เลี้ยวต่อเนื่อง", expressway: "เข้าทางด่วน" };
+const SIDE_WORD = { left: "ชิดซ้าย", right: "ชิดขวา", middle: "ใช้ช่องกลาง", uturn: "ชิดขวาสุด" };
+
+function inferSide(step) {
+  const m = step.raw.maneuver, t = m.type, mod = m.modifier || "straight";
+  if (mod === "uturn") return "uturn";
+  if (/roundabout|rotary/.test(t)) return (m.exit || 1) <= 1 ? "left" : "right";   // Thailand: clockwise, inner lane = right
+  if (/left/.test(mod)) return "left";
+  if (/right/.test(mod)) return "right";
+  return "middle";
+}
+function hasParallel(it) {
+  if (!it || !it.bearings || it.out == null) return false;
+  const ob = it.bearings[it.out];
+  return it.bearings.some((b, i) => i !== it.out && i !== it.in && (!it.entry || it.entry[i] !== false) && Math.abs(norm180(b - ob)) <= 50);
+}
+function relKind(a) {
+  const it = a.inter; if (!it || it.out == null || !it.bearings) return "straight";
+  const r = norm180(it.bearings[it.out] - a.bBefore), ar = Math.abs(r), s = r < 0 ? "left" : "right";
+  return ar < 12 ? "straight" : ar < 50 ? "slight " + s : ar < 125 ? s : "sharp " + s;
+}
+function lastClasses(step) { const ints = step && step.raw.intersections; return ints && ints.length ? (ints[ints.length - 1].classes || []) : []; }
+
+function buildAlerts(all, tr) {
+  const alerts = [];
+  all.forEach((s, k) => {
+    const ints = s.raw.intersections || [], m = s.raw.maneuver, type = m.type;
+    if (type !== "depart" && type !== "arrive") {
+      const it = ints[0] || {}, prev = all[k - 1], next = all[k + 1];
+      const cls = it.classes || [], pcls = lastClasses(prev);
+      const a = { kind: "maneuver", step: s, inter: it, loc: m.location, along: s.along, bBefore: m.bearing_before || 0, reasons: [] };
+      if (/ramp/.test(type)) a.reasons.push("ramp");
+      if (type === "fork") a.reasons.push("fork");
+      if (/roundabout|rotary/.test(type)) a.reasons.push("roundabout");
+      if (m.modifier === "uturn") a.reasons.push("uturn");
+      if (it.lanes && it.lanes.length >= 2 && it.lanes.some(l => l.valid) && it.lanes.some(l => !l.valid)) a.reasons.push("lanes");
+      if ((it.bearings || []).length >= 5) a.reasons.push("big");
+      if ((cls.includes("motorway") && !pcls.includes("motorway")) || (cls.includes("toll") && !pcls.includes("toll"))) a.reasons.push("expressway");
+      if (next && next.raw.maneuver.type !== "arrive" && next.along - s.along < 200 && next.kind !== "straight") { a.reasons.push("chain"); a.chain = next; }
+      a.toll = cls.includes("toll"); a.motorway = cls.includes("motorway");
+      a.complex = a.reasons.length > 0;
+      a.state = "ok";
+      a.showDist = a.reasons.some(x => x === "ramp" || x === "expressway" || x === "fork") ? 600 : 400;
+      alerts.push(a);
+    }
+    // straight-through intersections where a road splits off at a shallow angle
+    let from = s.segIdx || 0;
+    ints.slice(1).forEach(it => {
+      if (!hasParallel(it)) return;
+      const pj = project(tr, it.location, Math.max(0, from - 2), tr.xy.length - 1);
+      from = pj.i;
+      if (pj.d > 25) return;
+      alerts.push({ kind: "pass", step: null, inter: it, loc: it.location, along: pj.along,
+        bBefore: it.in != null ? (it.bearings[it.in] + 180) % 360 : 0, reasons: [], state: "pending", complex: false, showDist: 380 });
+    });
+  });
+  alerts.sort((x, y) => x.along - y.along);
+  alerts.forEach((a, i) => { a.id = i; a.arrow = a.kind === "maneuver" ? a.step.kind : relKind(a); a.advice = laneAdvice(a); });
+  return alerts;
+}
+
+/* --- road level (bridge / tunnel) from the vector tiles already on screen --- */
+const ROAD_CLASSES = ["motorway", "trunk", "primary", "secondary", "tertiary", "minor", "service", "busway"];
+let featCache = { t: -1e9, list: [] };
+function roadFeatures() {
+  const now = performance.now();
+  if (now - featCache.t < 1500) return featCache.list;
+  let raw = [];
+  try { raw = map.querySourceFeatures("omt", { sourceLayer: "transportation" }); } catch (e) { raw = []; }
+  const list = [];
+  for (const f of raw) {
+    const p = f.properties || {};
+    if (!ROAD_CLASSES.includes(p.class)) continue;
+    const g = f.geometry; if (!g) continue;
+    const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : null;
+    if (!lines) continue;
+    for (const ln of lines) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const c of ln) { if (c[0] < x0) x0 = c[0]; if (c[0] > x1) x1 = c[0]; if (c[1] < y0) y0 = c[1]; if (c[1] > y1) y1 = c[1]; }
+      list.push({ ln, bb: [x0, y0, x1, y1], cls: p.class, brunnel: p.brunnel || null });
+    }
+  }
+  featCache = { t: now, list };
+  return list;
+}
+function distToLine(ll, ln, k) {
+  const px = ll[0] * k * 111320, py = ll[1] * 110540; let best = Infinity;
+  for (let i = 0; i < ln.length - 1; i++) {
+    const ax = ln[i][0] * k * 111320, ay = ln[i][1] * 110540, bx = ln[i + 1][0] * k * 111320, by = ln[i + 1][1] * 110540;
+    const vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy;
+    let t = L2 ? ((px - ax) * vx + (py - ay) * vy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+    const d = Math.hypot(px - (ax + vx * t), py - (ay + vy * t)); if (d < best) best = d;
+  }
+  return best;
+}
+/* nearest road to a point; null when nothing within maxM (or tiles not loaded there) */
+function nearestRoad(ll, maxM) {
+  const list = roadFeatures(); if (!list.length) return null;
+  const k = Math.cos(toRad(ll[1])), pad = (maxM * 1.5) / 110540, padx = pad / k;
+  let best = null;
+  for (const r of list) {
+    if (ll[0] < r.bb[0] - padx || ll[0] > r.bb[2] + padx || ll[1] < r.bb[1] - pad || ll[1] > r.bb[3] + pad) continue;
+    const d = distToLine(ll, r.ln, k);
+    if (d <= maxM && (!best || d < best.d)) best = { d, cls: r.cls, brunnel: r.brunnel };
+  }
+  return best;
+}
+function evaluateAlert(a) {
+  if (a.levels && a.lvZ >= 14.5) return true;
+  if (!map || !st.track) return false;
+  const before = nearestRoad(pointAt(st.track, a.along - 35).ll, 12);
+  const after = nearestRoad(pointAt(st.track, a.along + 70).ll, 12);
+  if (!before || !after) return false;                       // tiles not ready around this junction
+  const it = a.inter || {}, levels = {}, sib = [];
+  if (it.bearings) it.bearings.forEach((b, i) => {
+    if (i === it.in) { levels[i] = before.brunnel; return; }
+    if (i === it.out) { levels[i] = after.brunnel; return; }
+    if (it.entry && it.entry[i] === false) return;
+    const n = nearestRoad(destPoint(a.loc, b, 60), 15) || nearestRoad(destPoint(a.loc, b, 35), 12);
+    if (n) { levels[i] = n.brunnel; sib.push({ i, b, brunnel: n.brunnel, cls: n.cls }); }
+  });
+  a.levels = levels; a.lvZ = map.getZoom();
+  a.cue = levelCue(a, { before: before.brunnel, after: after.brunnel, afterCls: after.cls, sib });
+  if (a.kind === "pass") a.state = a.cue ? "ok" : "none";
+  else { a.state = "ok"; a.complex = a.reasons.length > 0 || !!a.cue; }
+  a.advice = laneAdvice(a);
+  a.rev = (a.rev || 0) + 1;
+  return true;
+}
+/* what the driver must do about levels; `other` = side where the wrong branch is */
+function levelCue(a, lv) {
+  const it = a.inter || {}, outB = it.out != null && it.bearings ? it.bearings[it.out] : a.bBefore;
+  const near = lv.sib.filter(s => Math.abs(norm180(s.b - outB)) <= 70);
+  const isB = x => x === "bridge", isT = x => x === "tunnel";
+  const sideOf = s => (s ? (Math.abs(norm180(s.b - outB)) < 4 ? null : norm180(s.b - outB) < 0 ? "left" : "right") : null);
+  let s;
+  if (isB(lv.after) && !isB(lv.before)) { s = near.find(x => !isB(x.brunnel)); return { kind: "up", text: lv.afterCls === "motorway" ? "ขึ้นทางด่วน (ทางยกระดับ)" : "ขึ้นสะพาน", other: sideOf(s) }; }
+  if (!isB(lv.after) && isB(lv.before)) { s = near.find(x => isB(x.brunnel)); return { kind: "down", text: "ลงจากสะพาน", other: sideOf(s) }; }
+  if (!isB(lv.after) && (s = near.find(x => isB(x.brunnel))))
+    return { kind: "stay-ground", text: s.cls === "motorway" ? "ไม่ต้องขึ้นทางด่วน ให้อยู่ทางราบ" : "ไม่ต้องขึ้นสะพาน ให้อยู่ทางราบ", other: sideOf(s) };
+  if (isB(lv.after) && isB(lv.before) && (s = near.find(x => !isB(x.brunnel)))) return { kind: "stay-bridge", text: "อยู่บนสะพานต่อ ไม่ต้องลง", other: sideOf(s) };
+  if (isT(lv.after) && !isT(lv.before)) { s = near.find(x => !isT(x.brunnel)); return { kind: "tunnel-in", text: "ลงอุโมงค์", other: sideOf(s) }; }
+  if (!isT(lv.after) && (s = near.find(x => isT(x.brunnel)))) return { kind: "avoid-tunnel", text: "ไม่ต้องลงอุโมงค์ ให้อยู่ทางราบ", other: sideOf(s) };
+  if (lv.afterCls !== "motorway" && (s = near.find(x => x.cls === "motorway"))) return { kind: "stay-ground", text: "ไม่ต้องขึ้นทางด่วน ตรงไปทางราบ", other: sideOf(s) };
+  return null;
+}
+
+/* --- lane advice: real OSM turn lanes when present, otherwise inferred --- */
+function laneAdvice(a) {
+  const it = a.inter || {}, step = a.step;
+  if (it.lanes && it.lanes.length >= 2 && it.lanes.some(l => l.valid)) {
+    const lanes = it.lanes.map(l => ({ ind: (l.indications && l.indications.length ? l.indications : ["none"]).map(x => x === "none" ? "straight" : x), rec: !!l.valid }));
+    const idx = lanes.map((l, i) => l.rec ? i : -1).filter(i => i >= 0), n = lanes.length, k = idx.length, first = idx[0], last = idx[k - 1];
+    const ns = a.chain ? inferSide(a.chain) : null;     // turning again soon: prefer the lane on that side
+    if (ns === "right" || ns === "uturn") lanes[last].best = true; else if (ns === "left") lanes[first].best = true;
+    const side = k === n ? "any" : first === 0 ? "left" : last === n - 1 ? "right" : "middle";
+    let text;
+    if (side === "any") text = "ใช้ได้ทุกช่อง";
+    else if (k === 1) text = first === 0 ? "ใช้ช่องซ้ายสุด" : first === n - 1 ? "ใช้ช่องขวาสุด" : "ใช้ช่องที่ " + (first + 1) + " จากซ้าย";
+    else text = side === "left" ? "ใช้ " + k + " ช่องซ้าย" : side === "right" ? "ใช้ " + k + " ช่องขวา" : "ใช้ช่องที่ " + (first + 1) + "–" + (last + 1) + " จากซ้าย";
+    const lead = side === "left" || side === "right" ? SIDE_WORD[side] + " · " : "";
+    return { lanes, real: true, side, text: lead + text, say: side === "any" ? "" : (lead ? SIDE_WORD[side] + " " : "") + text };
+  }
+  let side = step ? inferSide(step) : "middle";
+  if (a.cue && a.cue.other && side === "middle") side = a.cue.other === "left" ? "right" : "left";   // keep away from the wrong branch
+  const kind = step ? (step.kind === "arrive" ? "straight" : step.kind) : (a.arrow || "straight");
+  const lanes = [0, 1, 2].map(() => ({ ind: ["straight"], rec: false }));
+  const rec = side === "left" ? 0 : side === "right" || side === "uturn" ? 2 : 1;
+  lanes[rec].rec = true; lanes[rec].best = true; lanes[rec].ind = [kind];
+  const text = { left: "ชิดซ้าย ใช้ช่องซ้าย", right: "ชิดขวา ใช้ช่องขวา", middle: "ใช้ช่องกลาง ตรงไป", uturn: "ชิดขวาสุด เตรียมกลับรถ" }[side];
+  return { lanes, real: false, side, text, say: text };
+}
+
+/* --- drawings --- */
+function lanesSvg(adv) {
+  const n = adv.lanes.length, lw = n > 5 ? 38 : 46, pad = 6, W = n * lw + pad * 2, H = 92;
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc(adv.text) + '">';
+  s += '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="12" style="fill:var(--jv-road)"/>';
+  adv.lanes.forEach((l, i) => {
+    const x = pad + i * lw;
+    if (l.rec) s += '<rect x="' + (x + 3) + '" y="6" width="' + (lw - 6) + '" height="' + (H - 12) + '" rx="8" style="fill:' + (l.best ? "var(--jv-lane-best)" : "var(--jv-lane-rec)") + ';stroke:var(--route);stroke-width:' + (l.best ? 2.5 : 1.5) + '"/>';
+    const col = l.rec ? "var(--route)" : "var(--jv-dim)";
+    l.ind.forEach(kd => { s += glyph(kd, x + 5, 20, lw - 10, col, 5.5); });
+    if (i > 0) s += '<line x1="' + x + '" y1="8" x2="' + x + '" y2="' + (H - 8) + '" style="stroke:var(--jv-mark);stroke-width:2;stroke-dasharray:7 6"/>';
+  });
+  s += "</svg>";
+  return s + '<div class="jv-cap">' + (adv.real ? "ช่องจราจรจากข้อมูลแผนที่ (ซ้าย → ขวา)" : "แนะนำโดยประมาณจากทิศทาง แยกนี้ยังไม่มีข้อมูลช่องจราจร") + "</div>";
+}
+function junctionSvg(a) {
+  const it = a.inter; if (!it || !it.bearings || it.bearings.length < 2) return "";
+  const cx = 110, cy = 108, L = 86, lv = a.levels || {}, heading = a.bBefore || 0;
+  // shallow splits are drawn wider than real so the two branches are easy to tell apart
+  const vis = r => { const ar = Math.abs(r); return ar >= 60 ? r : Math.sign(r) * Math.min(60, Math.max(ar, ar * 1.8 + (ar > 3 ? 8 : 0))); };
+  const end = b => { const r = toRad(vis(norm180(b - heading))); return [cx + L * Math.sin(r), cy - L * Math.cos(r)]; };
+  const seg = p => "M" + cx + " " + cy + "L" + p[0].toFixed(1) + " " + p[1].toFixed(1);
+  const chip = (p, t, warn, f) => { f = f || 0.85; const q = [cx + (p[0] - cx) * f, cy + (p[1] - cy) * f], w = t.length * 9 + 16;
+    return '<g transform="translate(' + q[0].toFixed(1) + " " + q[1].toFixed(1) + ')"><rect x="' + (-w / 2) + '" y="-11" width="' + w + '" height="22" rx="11" style="fill:var(--glass-strong);stroke:' + (warn ? "var(--warn-text)" : "var(--line)") + '"/>' +
+      '<text x="0" y="5" text-anchor="middle" style="fill:' + (warn ? "var(--warn-text)" : "var(--fg)") + ';font:600 12px var(--font)">' + t + "</text></g>"; };
+  let ground = "", raised = "", labels = "";
+  it.bearings.forEach((b, i) => {
+    if (i === it.out || i === it.in) return;
+    const p = end(b), ok = !it.entry || it.entry[i] !== false, w = ok ? 24 : 12, l = lv[i];
+    if (l === "bridge") {
+      raised += '<path d="' + seg(p) + '" transform="translate(4 7)" style="stroke:rgba(0,0,0,.45);stroke-width:' + (w + 4) + '"/>';
+      raised += '<path d="' + seg(p) + '" style="stroke:var(--jv-bridge);stroke-width:' + w + '"/>';
+      labels += chip(p, "สะพาน", true);
+    } else if (l === "tunnel") {
+      ground += '<path d="' + seg(p) + '" style="stroke:var(--jv-road);stroke-width:' + w + ';stroke-dasharray:8 6"/>';
+      labels += chip(p, "อุโมงค์", true);
+    } else ground += '<path d="' + seg(p) + '" style="stroke:var(--jv-road);stroke-width:' + w + ';opacity:' + (ok ? 1 : 0.45) + '"/>';
+  });
+  const pin = end(it.in != null ? it.bearings[it.in] : heading + 180);
+  const pout = it.out != null ? end(it.bearings[it.out]) : [cx, cy - L];
+  const outL = it.out != null ? lv[it.out] : null;
+  const rp = "M" + pin[0].toFixed(1) + " " + pin[1].toFixed(1) + "L" + cx + " " + cy + "L" + pout[0].toFixed(1) + " " + pout[1].toFixed(1);
+  let route = "";
+  if (outL === "bridge") route += '<path d="' + seg(pout) + '" transform="translate(4 7)" style="stroke:rgba(0,0,0,.45);stroke-width:28"/>';
+  route += '<path d="' + rp + '" style="stroke:' + (outL === "bridge" ? "var(--jv-bridge)" : "var(--jv-road)") + ';stroke-width:26"/>';
+  route += '<path d="' + rp + '" style="stroke:#ffffff;stroke-width:14"/><path d="' + rp + '" style="stroke:var(--route);stroke-width:9"/>';
+  const ang = Math.atan2(pout[1] - cy, pout[0] - cx), hx = pout[0], hy = pout[1];
+  const tri = [[hx + 12 * Math.cos(ang), hy + 12 * Math.sin(ang)], [hx + 13 * Math.cos(ang + 2.2), hy + 13 * Math.sin(ang + 2.2)], [hx + 13 * Math.cos(ang - 2.2), hy + 13 * Math.sin(ang - 2.2)]];
+  route += '<path d="M' + tri.map(p => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + 'Z" style="fill:var(--route);stroke:#ffffff;stroke-width:2;stroke-linejoin:round"/>';
+  if (outL === "bridge") labels += chip(pout, "สะพาน", false, 0.45);
+  else if (outL === "tunnel") labels += chip(pout, "อุโมงค์", false, 0.45);
+  else if (a.cue && (a.cue.kind === "stay-ground" || a.cue.kind === "avoid-tunnel")) labels += chip(pout, "ทางราบ", false, 0.45);
+  const ring = a.step && /roundabout|rotary/.test(a.step.raw.maneuver.type) ? '<circle cx="' + cx + '" cy="' + cy + '" r="22" style="fill:none;stroke:var(--jv-road);stroke-width:14"/>' : "";
+  return '<svg viewBox="0 0 220 200" role="img" aria-label="ผังทางแยก" style="fill:none;stroke-linecap:round;stroke-linejoin:round">' + ground + ring + raised + route + labels + "</svg>";
+}
+const WARN_ICON = '<svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>';
+function alertTitle(a) {
+  if (a.kind === "maneuver") return a.step.text;
+  if (!a.cue) return "ตรงไป";
+  return a.cue.kind === "stay-ground" ? "ตรงไปทางราบ" : a.cue.kind === "avoid-tunnel" ? "ตรงไปทางราบ" : a.cue.text;
+}
+function alertTags(a) {
+  const t = a.reasons.map(r => REASON_TH[r]);
+  if (a.cue) t.push(a.cue.kind === "up" ? "ขึ้นสะพาน" : a.cue.kind === "stay-ground" ? "มีทางขึ้นสะพานข้างๆ" : a.cue.kind === "down" ? "ลงสะพาน" : a.cue.kind === "stay-bridge" ? "อยู่บนสะพาน" : "อุโมงค์");
+  return t;
+}
+function arrowGeoFor(a) {
+  const line = sliceBetween(st.track, a.along - 40, a.along + 45);
+  let n = line.length; if (n < 2) return EMPTY;
+  const p = line[n - 1]; let q = line[n - 2], j = n - 2;
+  while (j > 0 && haversine(q, p) < 1) q = line[--j];
+  if (haversine(q, p) < 0.5) return EMPTY;
+  const b = bearing(q, p), tip = destPoint(p, b, 18), l = destPoint(p, b - 90, 11), r = destPoint(p, b + 90, 11);
+  return { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { part: "shaft" }, geometry: { type: "LineString", coordinates: line } },
+    { type: "Feature", properties: { part: "head" }, geometry: { type: "Polygon", coordinates: [[l, tip, r, l]] } }] };
+}
+
+/* --- chime --- */
+let actx = null;
+function chime() {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = actx.currentTime;
+    [[880, 0], [1320, 0.16]].forEach(([f, dt]) => {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + dt); g.gain.exponentialRampToValueAtTime(0.28, t + dt + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.24);
+      o.connect(g); g.connect(actx.destination); o.start(t + dt); o.stop(t + dt + 0.26);
+    });
+  } catch (e) {}
+}
+
+/* ---------- app state ---------- */
+const st = {
+  origin: DEMO.origin, dest: null, route: null, track: null, steps: [],
+  mode: "preview",            // preview | nav
+  source: "demo",             // demo | gps | sim
+  along: 0, heading: 0, lastPos: null, gpsWatch: null, offCount: 0,
+  spoken: {}, raf: 0, lastT: 0, pois: [], poiMarkers: [], dayMode: false,
+  alerts: [], alertByStep: new Map(), jvId: null, jvPreview: false, previewIds: []
+};
+const EMPTY = { type: "FeatureCollection", features: [] };
+
+/* ---------- map style ---------- */
+function palette(day) {
+  return day ? {
+    bg: "#e8ebef", water: "#a9cbe3", park: "#d3e5cf", landuse: "#e1e4e9",
+    road: "#ffffff", roadCase: "#cfd5de", major: "#fff3d6", majorCase: "#e3c98f", rail: "#a5afbd",
+    bLow: "#e4e7ec", bHigh: "#f7f8fa", label: "#3a4a5e", halo: "#ffffff", poi: "#6b7a8c"
+  } : {
+    bg: "#08101b", water: "#0c2236", park: "#0d1c1a", landuse: "#0b1420",
+    road: "#1c2a3d", roadCase: "#0a121d", major: "#25374f", majorCase: "#0a121d", rail: "#2f405a",
+    bLow: "#16212f", bHigh: "#2f4b6e", label: "#9fb4ca", halo: "#06101c", poi: "#5f7690"
+  };
+}
+function nameExpr() {
+  return S.lang === "en"
+    ? ["coalesce", ["get", "name:en"], ["get", "name_en"], ["get", "name"]]
+    : ["coalesce", ["get", "name:th"], ["get", "name"]];
+}
+function buildStyle(day) {
+  const c = palette(day);
+  const roadW = (base) => ["interpolate", ["exponential", 1.6], ["zoom"], 10, base * 0.4, 14, base * 1.4, 18, base * 9];
+  return {
+    version: 8,
+    glyphs: API.glyphs,
+    sources: {
+      omt: { type: "vector", url: API.tiles },
+      range: { type: "geojson", data: st.rangeGeo || EMPTY },
+      routeAll: { type: "geojson", data: st.routeGeo || EMPTY },
+      routeDone: { type: "geojson", data: st.doneGeo || EMPTY },
+      manArrow: { type: "geojson", data: st.arrowGeo || EMPTY }
+    },
+    light: { anchor: "viewport", color: "#ffffff", intensity: day ? 0.32 : 0.22, position: [1.4, 210, 35] },
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": c.bg } },
+      { id: "landuse", type: "fill", source: "omt", "source-layer": "landuse", paint: { "fill-color": c.landuse, "fill-opacity": 0.6 } },
+      { id: "park", type: "fill", source: "omt", "source-layer": "park", paint: { "fill-color": c.park } },
+      { id: "landcover", type: "fill", source: "omt", "source-layer": "landcover", filter: ["in", ["get", "class"], ["literal", ["grass", "wood"]]], paint: { "fill-color": c.park, "fill-opacity": 0.7 } },
+      { id: "water", type: "fill", source: "omt", "source-layer": "water", paint: { "fill-color": c.water } },
+      { id: "range-fill", type: "fill", source: "range", paint: { "fill-color": day ? "#0aa5c4" : "#22e3f2", "fill-opacity": day ? 0.07 : 0.08 } },
+      { id: "range-line", type: "line", source: "range", paint: { "line-color": day ? "#0aa5c4" : "#22e3f2", "line-opacity": 0.45, "line-width": 1.5, "line-dasharray": [2, 2] } },
+      { id: "road-minor-case", type: "line", source: "omt", "source-layer": "transportation", minzoom: 13,
+        filter: ["in", ["get", "class"], ["literal", ["minor", "service", "tertiary"]]],
+        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": c.roadCase, "line-width": roadW(1.3) } },
+      { id: "road-minor", type: "line", source: "omt", "source-layer": "transportation", minzoom: 13,
+        filter: ["in", ["get", "class"], ["literal", ["minor", "service", "tertiary"]]],
+        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": c.road, "line-width": roadW(1) } },
+      { id: "road-major-case", type: "line", source: "omt", "source-layer": "transportation",
+        filter: ["in", ["get", "class"], ["literal", ["primary", "secondary", "trunk", "motorway"]]],
+        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": c.majorCase, "line-width": roadW(2.1) } },
+      { id: "road-major", type: "line", source: "omt", "source-layer": "transportation",
+        filter: ["in", ["get", "class"], ["literal", ["primary", "secondary", "trunk", "motorway"]]],
+        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": c.major, "line-width": roadW(1.7) } },
+      { id: "rail", type: "line", source: "omt", "source-layer": "transportation",
+        filter: ["in", ["get", "class"], ["literal", ["rail", "transit"]]],
+        paint: { "line-color": c.rail, "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 17, 3], "line-dasharray": [3, 2] } },
+      { id: "route-glow", type: "line", source: "routeAll", layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": day ? "#0aa5c4" : "#22e3f2", "line-opacity": 0.35, "line-blur": 6, "line-width": ["interpolate", ["linear"], ["zoom"], 10, 8, 17, 26] } },
+      { id: "route", type: "line", source: "routeAll", layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": day ? "#0aa5c4" : "#22e3f2", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 3, 17, 10] } },
+      { id: "route-core", type: "line", source: "routeAll", layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#e9feff", "line-opacity": day ? 0 : 0.8, "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1, 17, 3] } },
+      { id: "route-done", type: "line", source: "routeDone", layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": day ? "#9aa7b6" : "#3a4b62", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 4, 17, 12] } },
+      { id: "man-shaft-case", type: "line", source: "manArrow", filter: ["==", ["get", "part"], "shaft"], layout: { "line-cap": "butt", "line-join": "round" },
+        paint: { "line-color": "#ffffff", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 17, 20, 19, 40] } },
+      { id: "man-shaft", type: "line", source: "manArrow", filter: ["==", ["get", "part"], "shaft"], layout: { "line-cap": "butt", "line-join": "round" },
+        paint: { "line-color": day ? "#0a8fab" : "#22e3f2", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 17, 12, 19, 26] } },
+      { id: "man-head", type: "fill", source: "manArrow", filter: ["==", ["get", "part"], "head"], paint: { "fill-color": day ? "#0a8fab" : "#22e3f2" } },
+      { id: "man-head-case", type: "line", source: "manArrow", filter: ["==", ["get", "part"], "head"], paint: { "line-color": "#ffffff", "line-width": 3 } },
+      { id: "buildings-3d", type: "fill-extrusion", source: "omt", "source-layer": "building", minzoom: 13,
+        filter: ["!=", ["get", "hide_3d"], true],
+        paint: {
+          "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "render_height"], 6], 0, c.bLow, 30, c.bLow, 150, c.bHigh, 300, day ? "#ffffff" : "#4f7aa8"],
+          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 13, 0, 14.5, ["coalesce", ["get", "render_height"], 6]],
+          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+          "fill-extrusion-opacity": day ? 0.95 : 0.9,
+          "fill-extrusion-vertical-gradient": true
+        } },
+      { id: "road-label", type: "symbol", source: "omt", "source-layer": "transportation_name", minzoom: 14,
+        layout: { "symbol-placement": "line", "text-field": nameExpr(), "text-font": ["Noto Sans Regular"], "text-size": 12, "text-max-angle": 30 },
+        paint: { "text-color": c.label, "text-halo-color": c.halo, "text-halo-width": 1.4 } },
+      { id: "water-label", type: "symbol", source: "omt", "source-layer": "water_name",
+        layout: { "symbol-placement": "line", "text-field": nameExpr(), "text-font": ["Noto Sans Regular"], "text-size": 13, "text-letter-spacing": 0.1 },
+        paint: { "text-color": day ? "#4b7ea8" : "#4f7ea6", "text-halo-color": c.halo, "text-halo-width": 1 } },
+      { id: "place-label", type: "symbol", source: "omt", "source-layer": "place", maxzoom: 15,
+        filter: ["in", ["get", "class"], ["literal", ["city", "town", "suburb", "neighbourhood", "quarter"]]],
+        layout: { "text-field": nameExpr(), "text-font": ["Noto Sans Bold"], "text-size": ["interpolate", ["linear"], ["zoom"], 9, 12, 14, 15] },
+        paint: { "text-color": c.label, "text-halo-color": c.halo, "text-halo-width": 1.5 } }
+    ]
+  };
+}
+
+/* ---------- map ---------- */
+let map;
+function isNight() { if (S.theme === "night") return true; if (S.theme === "day") return false; const h = new Date().getHours(); return h >= 18 || h < 6; }
+function applyMode() {
+  st.dayMode = !isNight();
+  document.documentElement.dataset.mode = st.dayMode ? "day" : "night";
+}
+function initMap() {
+  applyMode();
+  if (!window.maplibregl) { $("panel").innerHTML = '<h2>โหลดแผนที่ไม่ได้</h2><p class="sub">ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต แล้วเปิดหน้านี้ใหม่</p>'; return; }
+  map = new maplibregl.Map({
+    container: "map", style: buildStyle(st.dayMode), center: DEMO.view.center, zoom: DEMO.view.zoom,
+    pitch: DEMO.view.pitch, bearing: DEMO.view.bearing, maxPitch: 75, attributionControl: false,
+    maxBounds: [[TH_BBOX[0] - 2, TH_BBOX[1] - 2], [TH_BBOX[2] + 2, TH_BBOX[3] + 2]]
+  });
+  map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "OSRM · Nominatim · Overpass" }), "bottom-right");
+  map.on("load", onMapLoad);
+  map.on("dragstart", () => { if (st.mode === "nav") { st.follow = false; showRecenter(true); } });
+  map.on("contextmenu", e => openPointMenu(e.lngLat));
+  // long-press on touch
+  let lp = null;
+  map.on("touchstart", e => { if (e.originalEvent.touches.length !== 1) return; const ll = e.lngLat, p = e.point; lp = { t: setTimeout(() => openPointMenu(ll), 650), p }; });
+  map.on("touchmove", e => { if (lp && Math.hypot(e.point.x - lp.p.x, e.point.y - lp.p.y) > 8) { clearTimeout(lp.t); lp = null; } });
+  map.on("touchend", () => { if (lp) { clearTimeout(lp.t); lp = null; } });
+}
+function setData(id, data) { const s = map && map.getSource(id); if (s) s.setData(data); }
+
+/* landmark + vehicle markers */
+let carMarker, destMarker, originMarker;
+function carEl() {
+  const d = document.createElement("div"); d.className = "car";
+  d.innerHTML = '<svg viewBox="0 0 40 40"><path d="M20 4L33 34 20 27 7 34z" fill="#22e3f2" stroke="#e9feff" stroke-width="2" stroke-linejoin="round"/></svg>';
+  return d;
+}
+function pinEl(kind) {
+  const d = document.createElement("div"); d.className = "pin";
+  d.innerHTML = kind === "charge"
+    ? '<svg viewBox="0 0 24 24" fill="#04121a"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="#04121a"><circle cx="12" cy="12" r="5"/></svg>';
+  return d;
+}
+function placeLandmarks() {
+  LANDMARKS.forEach(l => {
+    const el = document.createElement("div"); el.className = "lm"; el.textContent = S.lang === "en" ? l.en : l.name;
+    new maplibregl.Marker({ element: el, anchor: "bottom", offset: [0, -6] }).setLngLat(l.lngLat).addTo(map);
+  });
+}
+
+/* ---------- panel renderers ---------- */
+function batteryAtArrival(distM) {
+  const usedKwh = distM / 1000 * S.consumption / 100;
+  return Math.max(0, Math.round(S.battery - usedKwh / S.capacity * 100));
+}
+function rangeKm() { return S.battery / 100 * S.capacity / S.consumption * 100; }
+function battColor(p) { return p <= 15 ? "var(--bad)" : p <= 30 ? "var(--warn)" : "var(--ok)"; }
+function battBlock(p, label) {
+  return '<div class="batt" style="color:' + battColor(p) + '"><div class="cell"><div class="fill" style="width:' + p + '%"></div></div>' +
+    '<div><div class="pct num">' + p + '%</div><div class="sub" style="margin:0">' + esc(label) + "</div></div></div>";
+}
+function socketsOf(tags) {
+  const map_ = { "type2_combo": "CCS2", "type2": "Type 2", "chademo": "CHAdeMO", "type1": "Type 1", "gb_t_dc": "GB/T DC", "gb_t_ac": "GB/T AC", "type1_combo": "CCS1", "tesla_supercharger": "Tesla" };
+  const out = []; let kw = 0;
+  Object.keys(tags || {}).forEach(k => {
+    const m = /^socket:([a-z0-9_]+)$/.exec(k);
+    if (m && map_[m[1]]) { const n = parseInt(tags[k], 10); out.push(map_[m[1]] + (n > 1 ? " ×" + n : "")); }
+    const o = /^socket:[a-z0-9_]+:output$/.exec(k);
+    if (o) { const v = parseFloat(String(tags[k]).replace(",", ".")); if (!isNaN(v)) kw = Math.max(kw, /w$/i.test(tags[k]) && !/kw/i.test(tags[k]) ? v / 1000 : v); }
+  });
+  if (!kw && tags && tags["charging_station:output"]) kw = parseFloat(tags["charging_station:output"]) || 0;
+  return { list: out, kw };
+}
+function renderPreview() {
+  const r = st.route, d = st.dest; if (!r) return;
+  const eta = new Date(Date.now() + r.duration * 1000);
+  let h = (st.source === "demo" ? '<span class="tag">ตัวอย่าง</span>' : "") +
+    "<h2>" + esc(d.name) + "</h2><div class=\"sub\">" + esc(d.sub || "จาก " + st.origin.name) + "</div>";
+  if (d.charger) {
+    const s = socketsOf(d.tags);
+    h += '<div class="big num">' + (s.kw ? Math.round(s.kw) : "—") + "<small>kW</small></div>";
+    h += '<div class="chips">' + (s.list.length ? s.list.map(x => '<span class="chip ok">' + esc(x) + "</span>").join("") : '<span class="chip">ไม่ระบุหัวชาร์จ</span>') + "</div>";
+    if (d.tags && (d.tags.operator || d.tags.brand)) h += '<div class="row"><span>ผู้ให้บริการ</span><b>' + esc(d.tags.operator || d.tags.brand) + "</b></div>";
+  }
+  h += '<div class="row"><span>ระยะทาง</span><b class="num">' + fmtDist(r.distance) + "</b></div>";
+  h += '<div class="row"><span>ใช้เวลา</span><b class="num">' + fmtDur(r.duration) + "</b></div>";
+  h += '<div class="row"><span>ถึงประมาณ</span><b class="num">' + fmtClock(eta) + " น.</b></div>";
+  if (S.vehicle === "ev") h += battBlock(batteryAtArrival(r.distance), "แบตเตอรี่เมื่อถึง (ประมาณ)");
+  h += '<div class="btns"><button class="btn primary" id="goSim">จำลองการขับ</button><button class="btn" id="goGps">นำทางด้วย GPS</button></div>';
+  const al = previewAlerts();
+  h += '<div class="row" style="margin-top:12px"><span>จุดที่ต้องเลือกช่องทาง</span><b class="num">' + (al.length ? al.length + " จุด" : "ไม่พบ") + "</b></div>";
+  if (al.length) h += '<div class="list">' + al.slice(0, 10).map(a => '<button class="item" data-alert="' + a.id + '"><div><div class="n">' + esc(alertTitle(a)) +
+    '</div><div class="m">' + fmtDist(a.along) + " จากจุดเริ่ม · " + esc(alertTags(a).join(", ")) + '</div></div><div class="k">ดู</div></button>').join("") + "</div>";
+  if (d.charger) h += '<p class="note">ข้อมูลจุดชาร์จจาก OpenStreetMap ยังไม่มีสถานะว่างแบบสด</p>';
+  $("panel").innerHTML = h; $("panel").hidden = false;
+  $("goSim").onclick = () => startNav("sim");
+  $("goGps").onclick = () => startNav("gps");
+  $("panel").querySelectorAll("[data-alert]").forEach(b => b.onclick = () => previewAlert(+b.dataset.alert));
+}
+function previewAlerts() { return (st.alerts || []).filter(a => a.kind === "maneuver" ? a.complex : a.state === "ok"); }
+function renderNavPanel() {
+  const r = st.route; if (!r || !st.track) return;
+  const remain = Math.max(0, st.track.len - st.along);
+  const remainSec = r.duration * (remain / Math.max(1, st.track.len));
+  const eta = new Date(Date.now() + remainSec * 1000);
+  let h = "<h2>" + esc(st.dest.name) + '</h2><div class="sub">' + (st.source === "sim" ? "โหมดจำลอง" : "นำทางด้วย GPS") + "</div>";
+  h += '<div class="big num">' + fmtDist(remain).replace(/ (ม\.|กม\.)$/, "<small>$1</small>") + "</div>";
+  h += '<div class="row"><span>ถึงประมาณ</span><b class="num">' + fmtClock(eta) + " น.</b></div>";
+  h += '<div class="row"><span>เหลือเวลา</span><b class="num">' + fmtDur(remainSec) + "</b></div>";
+  if (S.vehicle === "ev") h += battBlock(batteryAtArrival(remain), "แบตเตอรี่เมื่อถึง (ประมาณ)");
+  h += '<div class="btns"><button class="btn" id="stopNav">หยุดนำทาง</button></div>';
+  $("panel").innerHTML = h;
+  $("stopNav").onclick = () => stopNav(false);
+}
+function renderNearby(list, center, kind) {
+  let h = "<h2>" + (kind === "charge" ? "สถานีชาร์จใกล้เคียง" : "ปั๊มน้ำมันใกล้เคียง") + '</h2><div class="sub">ในรัศมี 5 กม. เรียงตามระยะ</div>';
+  if (!list.length) h += '<p class="note">ไม่พบข้อมูลใน OpenStreetMap บริเวณนี้</p>';
+  h += '<div class="list">' + list.slice(0, 12).map((p, i) => {
+    const s = socketsOf(p.tags);
+    return '<button class="item" data-i="' + i + '"><div><div class="n">' + esc(p.name) + '</div><div class="m">' + fmtDist(p.dist) +
+      (s.list.length ? " · " + esc(s.list.join(", ")) : "") + "</div></div>" + (kind === "charge" && s.kw ? '<div class="k num">' + Math.round(s.kw) + " kW</div>" : "") + "</button>";
+  }).join("") + "</div>";
+  $("panel").innerHTML = h; $("panel").hidden = false;
+  $("panel").querySelectorAll(".item").forEach(b => b.onclick = () => { const p = list[+b.dataset.i]; setDestination(p); });
+}
+
+/* ---------- maneuver card ---------- */
+function currentStepIndex() {
+  const s = st.steps; for (let i = 0; i < s.length; i++) if (s[i].along > st.along + 3) return i; return s.length - 1;
+}
+function updateManeuver() {
+  if (!st.steps.length) return;
+  const i = currentStepIndex(), step = st.steps[i], dist = Math.max(0, step.along - st.along);
+  if (updateJunctionView()) { $("maneuver").hidden = true; $("nextman").hidden = true; speakFor(i, dist); return; }
+  $("maneuver").hidden = false;
+  $("manIcon").innerHTML = arrowSvg(maneuverKind(step));
+  $("manDist").textContent = fmtDist(dist);
+  $("manText").textContent = step.textShort;
+  const curRoad = i > 0 ? st.steps[i - 1].road : st.departRoad;
+  $("manRoad").textContent = curRoad ? "บน" + curRoad : "";
+  const nx = st.steps[i + 1];
+  if (nx && step.along - st.along < 400 && nx.along - step.along < 250) { $("nextman").hidden = false; $("nextman").textContent = "จากนั้น " + nx.textShort; }
+  else $("nextman").hidden = true;
+  speakFor(i, dist);
+}
+
+/* ---------- voice ---------- */
+let thVoice = null;
+function pickVoice() { try { const v = speechSynthesis.getVoices(); thVoice = v.find(x => /^th/i.test(x.lang)) || null; } catch (e) {} }
+if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function say(text) {
+  if (!S.voice || !("speechSynthesis" in window)) return;
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = "th-TH"; if (thVoice) u.voice = thVoice; u.rate = 1.0; speechSynthesis.speak(u); } catch (e) {}
+}
+function speakFor(i, dist) {
+  const step = st.steps[i]; if (!step || st.mode !== "nav") return;
+  const key = (b) => i + ":" + b;
+  // stages ordered far -> near; speak only the nearest stage reached, once
+  const plan = step.kind === "arrive" ? [[300, "far"], [30, "now"]] : [[800, "far"], [250, "mid"], [40, "now"]];
+  const reached = plan.filter(([t]) => dist <= t);
+  if (!reached.length) return;
+  const [th, tag] = reached[reached.length - 1];
+  if (st.spoken[key(tag)]) return;
+  plan.forEach(([t2, g2]) => { if (t2 >= th) st.spoken[key(g2)] = true; });
+  const al = st.alertByStep.get(step);
+  const pre = al && al.complex && S.laneAlert !== "off" ? [al.advice && al.advice.say, al.cue && al.cue.text].filter(Boolean).join(" ") : "";
+  if (tag === "now") { if (step.kind !== "arrive") say(step.text); }
+  else say("อีก " + spokenDist(dist) + " " + (pre ? pre + " แล้ว" : "") + step.text);
+}
+
+/* ---------- junction view (pop-up) ---------- */
+function activeAlert() {
+  const now = performance.now();
+  for (const a of st.alerts) {
+    const d = a.along - st.along;
+    if (d < -15) continue;
+    if (d > 1000) break;
+    if ((!a.levels || a.lvZ < 14.5) && (!a._t || now - a._t > 1500)) { a._t = now; evaluateAlert(a); }
+    if (!a.levels && a.kind === "pass" && d < 120) a.state = "none";      // never confirmed: stay quiet
+    if (d > a.showDist) continue;
+    if (a.kind === "maneuver" ? a.complex : a.state === "ok") return a;
+  }
+  return null;
+}
+/* returns true while the pop-up is showing */
+function updateJunctionView() {
+  if (S.laneAlert === "off" || st.mode !== "nav") { if (!st.jvPreview) hideJV(); return false; }
+  const a = activeAlert();
+  if (!a) { hideJV(); return false; }
+  const d = Math.max(0, a.along - st.along);
+  if (st.jvId !== a.id) { st.jvPreview = false; renderJV(a, false); onJVOpen(a, d); }
+  else if (st.jvRev !== (a.rev || 0)) renderJV(a, false);           // bridge / tunnel info arrived after opening
+  st.jvRev = a.rev || 0;
+  updateJVDist(a, d);
+  return true;
+}
+function renderJV(a, preview) {
+  st.jvId = a.id;
+  const adv = a.advice || laneAdvice(a);
+  $("jvIcon").innerHTML = arrowSvg(a.arrow);
+  $("jvText").textContent = alertTitle(a);
+  const sign = [];
+  if (preview) sign.push("อยู่ห่างจากจุดเริ่ม " + fmtDist(a.along));
+  if (a.step && a.step.raw.destinations) sign.push("ป้าย: " + a.step.raw.destinations);
+  if (a.step && a.step.raw.exits) sign.push("ทางออก " + a.step.raw.exits);
+  $("jvSign").textContent = sign.join(" · ");
+  const tags = a.reasons.map(r => '<span class="chip">' + esc(REASON_TH[r]) + "</span>");
+  if (a.toll) tags.push('<span class="chip toll">มีค่าผ่านทาง</span>');
+  $("jvTags").innerHTML = tags.join("");
+  $("jvTags").hidden = !tags.length;
+  $("jvJunction").innerHTML = junctionSvg(a);
+  $("jvLanes").innerHTML = lanesSvg(adv);
+  $("jvAdvice").textContent = adv.text;
+  $("jvCue").hidden = !a.cue;
+  if (a.cue) $("jvCue").innerHTML = WARN_ICON + "<span>" + esc(a.cue.text) + "</span>";
+  if (a.chain) {
+    const s2 = inferSide(a.chain), gap = Math.max(10, a.chain.along - a.along);
+    $("jvThen").hidden = false;
+    $("jvThen").textContent = "จากนั้นอีก " + fmtDist(gap) + " " + a.chain.text + (s2 === "left" ? " · หลังเลี้ยวให้ชิดซ้ายทันที" : s2 === "right" || s2 === "uturn" ? " · หลังเลี้ยวให้ชิดขวาทันที" : "");
+  } else $("jvThen").hidden = true;
+  $("jvNav").hidden = !preview;
+  $("jvBarWrap").hidden = !!preview;
+  const jv = $("jv"); jv.classList.remove("urgent"); jv.hidden = false;
+  jv.style.animation = "none"; void jv.offsetWidth; jv.style.animation = "";
+  if (preview) $("jvDist").textContent = fmtDist(Math.min(a.showDist, a.along));
+  st.arrowGeo = arrowGeoFor(a); setData("manArrow", st.arrowGeo);
+}
+function updateJVDist(a, d) {
+  $("jvDist").textContent = fmtDist(d);
+  $("jvBar").style.width = (100 * Math.min(1, Math.max(0, 1 - d / a.showDist))).toFixed(1) + "%";
+  $("jv").classList.toggle("urgent", d < 120);
+}
+function onJVOpen(a, d) {
+  if (S.voice) chime();
+  try { if (navigator.vibrate) navigator.vibrate([120, 80, 120]); } catch (e) {}
+  const adv = a.advice, cue = a.cue;
+  let text = null;
+  if (a.kind === "maneuver") {
+    const i = st.steps.indexOf(a.step);
+    if (d > 280) { st.spoken[i + ":far"] = true; text = "อีก " + spokenDist(d) + " " + [adv && adv.say, cue && cue.text].filter(Boolean).join(" ") + " แล้ว" + a.step.text; }
+  } else text = "อีก " + spokenDist(d) + " " + (cue ? cue.text : "ตรงไป") + (adv && adv.say ? " " + adv.say : "");
+  if (text) setTimeout(() => say(text), 380);
+}
+function hideJV() {
+  const jv = $("jv"); if (!jv || jv.hidden) { st.jvId = null; return; }
+  jv.hidden = true; st.jvId = null; st.jvPreview = false;
+  st.arrowGeo = EMPTY; setData("manArrow", EMPTY);
+}
+function previewAlert(id) {
+  const a = st.alerts[id]; if (!a || !st.track) return;
+  st.previewIds = previewAlerts().map(x => x.id);
+  st.jvPreview = true; closeSheets();
+  const wide = innerWidth > 720;
+  map.easeTo({ center: pointAt(st.track, a.along - 50).ll, bearing: a.bBefore || 0, pitch: 62, zoom: 17.2, duration: 1200,
+    padding: { top: wide ? innerHeight * 0.3 : innerHeight * 0.55, bottom: 0, left: wide ? 470 : 0, right: wide ? 320 : 0 } });
+  renderJV(a, true);
+  map.once("idle", () => { if (st.jvPreview && st.jvId === a.id) { a._t = 0; evaluateAlert(a); renderJV(a, true); } });
+}
+$("jvClose").onclick = () => { hideJV(); if (st.route && st.mode !== "nav") { renderPreview(); fitRoute(); } };
+$("jvPrev").onclick = () => { const ids = st.previewIds, k = ids.indexOf(st.jvId); if (ids.length) previewAlert(ids[(k - 1 + ids.length) % ids.length]); };
+$("jvNext").onclick = () => { const ids = st.previewIds, k = ids.indexOf(st.jvId); if (ids.length) previewAlert(ids[(k + 1) % ids.length]); };
+
+/* ---------- routing ---------- */
+async function route(from, to) {
+  const url = API.osrm + from[0] + "," + from[1] + ";" + to[0] + "," + to[1] + "?overview=full&geometries=geojson&steps=true&alternatives=false";
+  const j = await getJSON(url);
+  if (j.code !== "Ok" || !j.routes || !j.routes.length) throw new Error(j.message || "no route");
+  return j.routes[0];
+}
+function prepareRoute(r) {
+  st.route = r; st.track = buildTrack(r.geometry.coordinates);
+  const steps = [];
+  let from = 0;
+  r.legs.forEach(leg => leg.steps.forEach(s => {
+    const pj = project(st.track, s.maneuver.location, Math.max(0, from - 2), st.track.xy.length - 1);
+    from = pj.i;
+    const text = thaiInstruction(s);
+    steps.push({ raw: s, along: pj.along, segIdx: pj.i, text, textShort: text, road: roadOf(s), kind: maneuverKind(s) });
+  }));
+  // drop the "depart" step: the card should always show the next real maneuver
+  st.departRoad = steps.length ? steps[0].road : "";
+  st.steps = steps.length > 1 && steps[0].raw.maneuver.type === "depart" ? steps.slice(1) : steps;
+  st.alerts = buildAlerts(steps, st.track);
+  st.alertByStep = new Map(st.alerts.filter(a => a.kind === "maneuver").map(a => [a.step, a]));
+  hideJV();
+  st.routeGeo = { type: "Feature", geometry: r.geometry, properties: {} };
+  st.doneGeo = EMPTY; st.along = 0; st.spoken = {};
+  setData("routeAll", st.routeGeo); setData("routeDone", EMPTY);
+}
+function fitRoute() {
+  if (!st.track) return;
+  const b = new maplibregl.LngLatBounds(); st.track.coords.forEach(c => b.extend(c));
+  const wide = innerWidth > 720;
+  map.fitBounds(b, { padding: { top: 90, bottom: wide ? 110 : innerHeight * 0.45, left: 40, right: wide ? 360 : 40 }, pitch: 55, bearing: map.getBearing(), duration: 1200, maxZoom: 16.5 });
+}
+function updateRange() {
+  st.rangeGeo = S.vehicle === "ev" ? circlePoly(st.origin.lngLat, rangeKm() * 1000) : EMPTY;
+  setData("range", st.rangeGeo);
+}
+async function setDestination(p) {
+  closeSheets();
+  st.dest = p; stopNav(true);
+  if (destMarker) destMarker.remove();
+  destMarker = new maplibregl.Marker({ element: pinEl(p.charger ? "charge" : "place"), anchor: "bottom" }).setLngLat(p.lngLat).addTo(map);
+  $("panel").innerHTML = '<h2>' + esc(p.name) + '</h2><div class="sub">กำลังหาเส้นทาง…</div>'; $("panel").hidden = false;
+  try {
+    const r = await route(st.origin.lngLat, p.lngLat);
+    prepareRoute(r); updateRange(); renderPreview(); fitRoute();
+    // once the overview tiles are in, look for bridge / tunnel splits along the route
+    map.once("idle", () => { if (st.route !== r || st.mode === "nav") return; st.alerts.forEach(a => evaluateAlert(a)); if (!st.jvPreview) renderPreview(); });
+  } catch (e) {
+    $("panel").innerHTML = '<h2>' + esc(p.name) + '</h2><div class="sub">หาเส้นทางไม่ได้ ลองใหม่อีกครั้ง หรือเลือกจุดอื่น</div>';
+  }
+}
+function setOrigin(lngLat, name) {
+  st.origin = { lngLat, name: name || "จุดที่เลือก" };
+  if (originMarker) originMarker.remove();
+  originMarker = new maplibregl.Marker({ element: carEl(), rotationAlignment: "map", pitchAlignment: "map" }).setLngLat(lngLat).addTo(map);
+  carMarker = originMarker;
+  updateRange();
+  if (st.dest) setDestination(st.dest);
+}
+
+/* ---------- navigation loop ---------- */
+function showRecenter(on) { $("bCenter").classList.toggle("on", !!on); }
+function startNav(source) {
+  if (!st.track) return;
+  st.jvPreview = false; hideJV();
+  st.alerts.forEach(a => { a._t = 0; if (a.kind === "pass" && a.state === "none" && !(a.lvZ >= 14.5)) { a.state = "pending"; a.levels = null; } });
+  st.mode = "nav"; st.source = source; st.along = 0; st.spoken = {}; st.follow = true; st.heading = bearing(st.track.coords[0], st.track.coords[Math.min(3, st.track.coords.length - 1)]);
+  setPill(source === "sim" ? "sim" : "gps-wait");
+  renderNavPanel(); updateManeuver();
+  say(source === "sim" ? "เริ่มจำลองการนำทาง " + st.steps[0].text : "เริ่มนำทาง");
+  if (source === "sim") { st.lastT = performance.now(); cancelAnimationFrame(st.raf); st.raf = requestAnimationFrame(simTick); }
+  else startGps();
+}
+function stopNav(silent) {
+  cancelAnimationFrame(st.raf); st.raf = 0;
+  if (st.gpsWatch != null) { navigator.geolocation.clearWatch(st.gpsWatch); st.gpsWatch = null; }
+  const wasNav = st.mode === "nav";
+  st.mode = "preview"; $("maneuver").hidden = true; $("nextman").hidden = true; hideJV();
+  setPill(st.source === "demo" ? "demo" : "idle");
+  if (wasNav && !silent) { setData("routeDone", EMPTY); if (carMarker && st.origin) carMarker.setLngLat(st.origin.lngLat); renderPreview(); fitRoute(); }
+}
+let lastPanel = 0, lastDone = 0;
+function simTick(now) {
+  const dt = Math.min(0.1, (now - st.lastT) / 1000); st.lastT = now;
+  const i = currentStepIndex(), toTurn = st.steps[i] ? st.steps[i].along - st.along : 999;
+  const cruise = 13.9;                                  // ~50 km/h
+  const v = toTurn < 60 ? 6 : toTurn < 150 ? 9 : cruise; // slow down near turns
+  st.along += v * dt * (+S.sim || 1);
+  advance(pointAt(st.track, st.along).ll, null, now);
+  if (st.along >= st.track.len - 2) return arrive();
+  st.raf = requestAnimationFrame(simTick);
+}
+function advance(ll, gpsHeading, now) {
+  const ahead = pointAt(st.track, st.along + 25).ll;
+  const target = gpsHeading != null && !isNaN(gpsHeading) ? gpsHeading : bearing(ll, ahead);
+  st.heading = angleLerp(st.heading, target, 0.12);
+  if (carMarker) { carMarker.setLngLat(ll); carMarker.setRotation(st.heading); }
+  if (st.follow) {
+    map.jumpTo({ center: ll, bearing: st.heading, pitch: 62, zoom: 17.3, padding: { top: innerHeight * (innerWidth > 720 ? 0.42 : 0.5), bottom: 0, left: 0, right: innerWidth > 720 ? 300 : 0 } });
+  }
+  if (now - lastDone > 250) { lastDone = now; st.doneGeo = { type: "Feature", geometry: { type: "LineString", coordinates: sliceTo(st.track, st.along) }, properties: {} }; setData("routeDone", st.doneGeo); }
+  updateManeuver();
+  if (now - lastPanel > 1000) { lastPanel = now; renderNavPanel(); }
+}
+function arrive() {
+  say("ถึงที่หมายแล้ว");
+  toast("ถึง " + st.dest.name + " แล้ว");
+  st.mode = "preview"; cancelAnimationFrame(st.raf);
+  if (st.gpsWatch != null) { navigator.geolocation.clearWatch(st.gpsWatch); st.gpsWatch = null; }
+  $("maneuver").hidden = true; $("nextman").hidden = true; hideJV();
+  setTimeout(() => { if (st.mode !== "nav") { renderPreview(); } }, 1500);
+}
+
+/* ---------- GPS ---------- */
+function setPill(kind) {
+  const p = $("gpsPill");
+  p.className = "pill" + (kind === "gps" ? " live" : kind === "sim" ? " sim" : "");
+  p.textContent = { demo: "ตัวอย่าง", sim: "จำลอง", gps: "GPS", "gps-wait": "รอ GPS…", idle: "พร้อม" }[kind] || "พร้อม";
+}
+function startGps() {
+  if (!("geolocation" in navigator)) { toast("อุปกรณ์นี้ไม่มี GPS ให้ใช้"); stopNav(); return; }
+  st.offCount = 0;
+  st.gpsWatch = navigator.geolocation.watchPosition(onGps, err => {
+    toast(err.code === 1 ? "ไม่ได้รับอนุญาตให้ใช้ตำแหน่ง เปิดสิทธิ์ตำแหน่งให้เบราว์เซอร์ หรือเปิดหน้านี้ผ่านลิงก์ https" : "ยังจับสัญญาณ GPS ไม่ได้", 5000);
+    if (err.code === 1) stopNav();
+  }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
+}
+let rerouting = false;
+async function onGps(pos) {
+  setPill("gps");
+  const ll = [pos.coords.longitude, pos.coords.latitude];
+  const pj = project(st.track, ll);
+  if (pj.d > 60 && !rerouting) {
+    if (++st.offCount >= 3) {
+      rerouting = true; toast("ออกนอกเส้นทาง กำลังหาเส้นทางใหม่"); say("กำลังหาเส้นทางใหม่");
+      try { const r = await route(ll, st.dest.lngLat); st.origin = { lngLat: ll, name: "ตำแหน่งปัจจุบัน" }; prepareRoute(r); updateRange(); } catch (e) { toast("หาเส้นทางใหม่ไม่ได้"); }
+      rerouting = false; st.offCount = 0; return;
+    }
+  } else st.offCount = 0;
+  st.along = Math.max(st.along, pj.along);
+  const spd = pos.coords.speed, hd = spd && spd > 2 ? pos.coords.heading : null;
+  advance(pj.d < 30 ? pointAt(st.track, st.along).ll : ll, hd, performance.now());
+  if (st.track.len - st.along < 25) arrive();
+}
+function useMyLocation() {
+  if (!("geolocation" in navigator)) return toast("อุปกรณ์นี้ไม่มี GPS ให้ใช้");
+  navigator.geolocation.getCurrentPosition(p => {
+    const ll = [p.coords.longitude, p.coords.latitude];
+    if (ll[0] < TH_BBOX[0] || ll[0] > TH_BBOX[2] || ll[1] < TH_BBOX[1] || ll[1] > TH_BBOX[3]) return toast("ตำแหน่งของคุณอยู่นอกประเทศไทย ใช้จุดตัวอย่างต่อ");
+    st.source = "idle"; setPill("idle");
+    setOrigin(ll, "ตำแหน่งปัจจุบัน");
+    map.easeTo({ center: ll, zoom: 16, pitch: 60, duration: 1000 });
+  }, () => toast("ใช้ตำแหน่งไม่ได้ ยังใช้จุดตัวอย่างอยู่ (เปิดสิทธิ์ตำแหน่งในเบราว์เซอร์)", 4500), { enableHighAccuracy: true, timeout: 12000 });
+}
+
+/* ---------- search ---------- */
+async function search(q) {
+  const res = $("results"); res.innerHTML = '<p class="note">กำลังค้นหา…</p>';
+  const near = st.origin.lngLat; let items = [];
+  try {
+    const u = API.nominatim + "?format=jsonv2&limit=8&countrycodes=th&accept-language=" + (S.lang === "en" ? "en" : "th") + "&q=" + encodeURIComponent(q) +
+      "&viewbox=" + (near[0] - 0.6) + "," + (near[1] + 0.6) + "," + (near[0] + 0.6) + "," + (near[1] - 0.6);
+    const j = await getJSON(u, { headers: { "Accept": "application/json" } }, 10000);
+    items = j.map(x => ({ name: x.name || x.display_name.split(",")[0], sub: x.display_name.split(",").slice(1, 3).join(",").trim(), lngLat: [+x.lon, +x.lat] }));
+  } catch (e) { /* fall through to photon */ }
+  if (!items.length) {
+    try {
+      const u = API.photon + "?limit=8&q=" + encodeURIComponent(q) + "&lat=" + near[1] + "&lon=" + near[0] + "&bbox=" + TH_BBOX.join(",");
+      const j = await getJSON(u, {}, 10000);
+      items = (j.features || []).map(f => ({ name: f.properties.name || f.properties.street || q, sub: [f.properties.district, f.properties.city || f.properties.state].filter(Boolean).join(", "), lngLat: f.geometry.coordinates }));
+    } catch (e) {}
+  }
+  items.forEach(it => it.dist = haversine(near, it.lngLat)); items.sort((a, b) => a.dist - b.dist);
+  if (!items.length) { res.innerHTML = '<p class="note">ไม่พบสถานที่นี้ ลองพิมพ์ชื่อให้สั้นลง หรือใช้ชื่อภาษาอังกฤษ</p>'; return; }
+  res.innerHTML = items.map((it, i) => '<button class="item" data-i="' + i + '"><div><div class="n">' + esc(it.name) + '</div><div class="m">' + esc(it.sub || "") + '</div></div><div class="k num">' + fmtDist(it.dist) + "</div></button>").join("");
+  res.querySelectorAll(".item").forEach(b => b.onclick = () => { st.source = st.source === "demo" ? "idle" : st.source; setPill("idle"); setDestination(items[+b.dataset.i]); });
+}
+
+/* ---------- nearby chargers / fuel (Overpass) ---------- */
+async function nearby(center, kind) {
+  const tag = kind === "charge" ? '["amenity"="charging_station"]' : '["amenity"="fuel"]';
+  const q = "[out:json][timeout:20];nwr" + tag + "(around:5000," + center[1] + "," + center[0] + ");out center tags 60;";
+  const j = await getJSON(API.overpass + "?data=" + encodeURIComponent(q), {}, 25000);
+  return (j.elements || []).map(e => {
+    const ll = e.type === "node" ? [e.lon, e.lat] : [e.center.lon, e.center.lat];
+    const t = e.tags || {};
+    const nm = (S.lang === "en" ? (t["name:en"] || t.name) : (t["name:th"] || t.name)) || t.brand || t.operator || (kind === "charge" ? "สถานีชาร์จ" : "ปั๊มน้ำมัน");
+    return { name: nm, lngLat: ll, tags: t, charger: kind === "charge", dist: haversine(center, ll), sub: [t.operator || t.brand, t["addr:street"]].filter(Boolean).join(" · ") };
+  }).sort((a, b) => a.dist - b.dist);
+}
+async function showNearby(center) {
+  const kind = S.vehicle === "ev" ? "charge" : "fuel";
+  $("panel").innerHTML = "<h2>" + (kind === "charge" ? "สถานีชาร์จใกล้เคียง" : "ปั๊มน้ำมันใกล้เคียง") + '</h2><div class="sub">กำลังโหลดจาก OpenStreetMap…</div>'; $("panel").hidden = false;
+  try { const list = await nearby(center || st.origin.lngLat, kind); drawPois(list, kind); renderNearby(list, center, kind); }
+  catch (e) { $("panel").innerHTML = '<h2>โหลดข้อมูลไม่ได้</h2><div class="sub">บริการ Overpass ไม่ตอบ ลองใหม่อีกครั้งในอีกสักครู่</div>'; }
+}
+function drawPois(list, kind) {
+  st.poiMarkers.forEach(m => m.remove()); st.poiMarkers = [];
+  list.slice(0, 30).forEach(p => {
+    const el = document.createElement("button"); el.className = "poi"; el.title = p.name; el.setAttribute("aria-label", p.name);
+    el.innerHTML = kind === "charge" ? '<svg viewBox="0 0 24 24" style="fill:var(--route)"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>' : '<svg viewBox="0 0 24 24" style="fill:var(--route)"><rect x="5" y="4" width="10" height="16" rx="2"/><path d="M15 9h2l2 3v6" style="stroke:var(--route);stroke-width:2;fill:none"/></svg>';
+    el.onclick = ev => { ev.stopPropagation(); setDestination(p); };
+    st.poiMarkers.push(new maplibregl.Marker({ element: el }).setLngLat(p.lngLat).addTo(map));
+  });
+}
+
+/* ---------- map point menu ---------- */
+let menuPopup;
+function openPointMenu(lngLat) {
+  if (menuPopup) menuPopup.remove();
+  const ll = [lngLat.lng, lngLat.lat];
+  const div = document.createElement("div"); div.className = "menu glass";
+  div.innerHTML = '<button data-a="go">ไปที่นี่</button><button data-a="from">เริ่มจากที่นี่</button><button data-a="near">' + (S.vehicle === "ev" ? "หาจุดชาร์จแถวนี้" : "หาปั๊มแถวนี้") + "</button>";
+  div.onclick = e => {
+    const a = e.target.dataset.a; if (!a) return; menuPopup.remove();
+    if (st.source === "demo") { st.source = "idle"; setPill("idle"); }
+    if (a === "go") setDestination({ name: "จุดที่เลือกบนแผนที่", lngLat: ll });
+    if (a === "from") setOrigin(ll, "จุดที่เลือก");
+    if (a === "near") showNearby(ll);
+  };
+  menuPopup = new maplibregl.Popup({ closeButton: false, offset: 8 }).setLngLat(lngLat).setDOMContent(div).addTo(map);
+}
+
+/* ---------- sheets & dock ---------- */
+function closeSheets() { ["searchSheet", "settingsSheet"].forEach(id => $(id).hidden = true); }
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => $(b.dataset.close).hidden = true);
+$("bSearch").onclick = () => { const s = $("searchSheet"), was = s.hidden; closeSheets(); s.hidden = !was; if (!s.hidden) setTimeout(() => $("q").focus(), 50); };
+$("searchForm").onsubmit = e => { e.preventDefault(); const q = $("q").value.trim(); if (q) search(q); };
+const PRESETS = [
+  { name: "ท่าอากาศยานดอนเมือง", sub: "ผ่านทางด่วน มีทางขึ้น-ลงหลายจุด", lngLat: [100.6040, 13.9126] },
+  { name: "อนุสาวรีย์ชัยสมรภูมิ", sub: "วงเวียนใหญ่และสะพานข้ามแยก", lngLat: [100.5383, 13.7650] },
+  { name: "สยามพารากอน", sub: "ข้ามแม่น้ำและแยกใหญ่ใจกลางเมือง", lngLat: [100.5347, 13.7462] }
+];
+$("presets").innerHTML = PRESETS.map((p, i) => '<button class="chip btnchip" data-p="' + i + '">' + esc(p.name) + "</button>").join("");
+$("presets").querySelectorAll("[data-p]").forEach(b => b.onclick = () => { if (st.source === "demo") { st.source = "idle"; setPill("idle"); } setDestination(Object.assign({}, PRESETS[+b.dataset.p])); });
+$("bNearby").onclick = () => { closeSheets(); showNearby(st.mode === "nav" && carMarker ? [carMarker.getLngLat().lng, carMarker.getLngLat().lat] : st.origin.lngLat); };
+$("bCenter").onclick = () => {
+  if (st.mode === "nav") { st.follow = true; showRecenter(false); return; }
+  useMyLocation();
+};
+$("bHome").onclick = () => { closeSheets(); if (st.jvPreview) hideJV(); if (st.mode !== "nav" && st.route) { renderPreview(); fitRoute(); } else if (!st.route) map.easeTo(Object.assign({ duration: 1000 }, DEMO.view)); };
+$("bTheme").onclick = () => { S.theme = st.dayMode ? "night" : "day"; saveSettings(); refreshStyle(); $("sTheme").value = S.theme; };
+$("bVoice").onclick = () => { S.voice = !S.voice; saveSettings(); syncVoiceBtn(); if (!S.voice) try { speechSynthesis.cancel(); } catch (e) {} else say("เปิดเสียงนำทาง"); };
+function syncVoiceBtn() { $("bVoice").classList.toggle("on", S.voice); $("voiceWave").style.display = S.voice ? "" : "none"; }
+$("bSettings").onclick = () => { const s = $("settingsSheet"), was = s.hidden; closeSheets(); s.hidden = !was; };
+function refreshStyle() { applyMode(); if (map) map.setStyle(buildStyle(st.dayMode)); }
+function bindSettings() {
+  const f = { sVehicle: "vehicle", sBattery: "battery", sCapacity: "capacity", sCons: "consumption", sLang: "lang", sTheme: "theme", sSim: "sim", sLane: "laneAlert" };
+  Object.keys(f).forEach(id => {
+    const el = $(id); el.value = S[f[id]];
+    el.onchange = () => {
+      const k = f[id]; let v = el.value;
+      if (["battery", "capacity", "consumption"].includes(k)) { v = parseFloat(v); if (isNaN(v)) { el.value = S[k]; return; } }
+      S[k] = v; saveSettings();
+      if (k === "theme" || k === "lang") refreshStyle();
+      if (k === "vehicle") $("bNearby").title = v === "ev" ? "จุดชาร์จใกล้เคียง" : "ปั๊มน้ำมันใกล้เคียง";
+      updateRange(); if (st.mode !== "nav" && st.route) renderPreview();
+    };
+  });
+}
+
+/* ---------- status bar ---------- */
+function tickClock() { $("clock").textContent = fmtClock(new Date()); }
+setInterval(tickClock, 15000); tickClock();
+if (navigator.getBattery) navigator.getBattery().then(b => { const u = () => $("phoneBatt").textContent = "โทรศัพท์ " + Math.round(b.level * 100) + "%"; u(); b.onlevelchange = u; }).catch(() => {});
+
+/* ---------- boot ---------- */
+async function onMapLoad() {
+  placeLandmarks();
+  setOrigin(DEMO.origin.lngLat, DEMO.origin.name);
+  st.source = "demo"; setPill("demo");
+  // demo destination: best charger near ICONSIAM, else ICONSIAM itself
+  let dest = DEMO.fallbackDest;
+  if (S.vehicle === "ev") {
+    try {
+      const list = await nearby(DEMO.fallbackDest.lngLat, "charge");
+      const near = list.filter(p => p.dist < 2500 && haversine(DEMO.origin.lngLat, p.lngLat) > 800);
+      near.sort((a, b) => (socketsOf(b.tags).kw - socketsOf(a.tags).kw) || (a.dist - b.dist));
+      if (near.length) { dest = near[0]; drawPois(list, "charge"); }
+    } catch (e) { /* keep fallback */ }
+  }
+  st.source = "demo";
+  await setDestination(dest);
+}
+bindSettings(); syncVoiceBtn();
+$("panel").innerHTML = '<span class="tag">ตัวอย่าง</span><h2>กำลังโหลดแผนที่กรุงเทพฯ</h2><div class="sub">แตะค้างหรือคลิกขวาบนแผนที่เพื่อเลือกจุด</div>';
+initMap();
+// keep style in sync with time of day when on auto
+setInterval(() => { if (S.theme === "auto" && st.dayMode === isNight()) refreshStyle(); }, 60000);
+</script>
+</body>
+</html>
